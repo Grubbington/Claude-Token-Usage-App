@@ -411,13 +411,11 @@ function paintSession() {
       <div class="stat-note">${st.note}</div>
     </div>`).join('');
 
-  const sep = '<span class="sep">·</span>';
   document.getElementById('session-meta').innerHTML = [
     `<b>${s.turns}</b> turns`,
     `<b>${s.models.join(', ')}</b>`,
     `est. <b>${fmtUSD(s.totals.cost_usd)}</b>`,
-    `budget is local — set <b>SESSION_TOKEN_BUDGET</b> to match your plan`,
-  ].join(sep);
+  ].join('<span class="sep">·</span>');
 }
 
 function renderSession(s) {
