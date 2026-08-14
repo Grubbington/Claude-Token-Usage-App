@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>&gt;_ TOKEN-USAGE.SYS</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  /* Red-on-black tech: neutral carbon surfaces, chrome-grey type, one hot red
+     signature accent. Series run red → amber → steel → chrome so identity comes
+     from hue AND lightness, not red alone. */
+  :root {
+    color-scheme: dark;
+    --bg: #000000;
+    --surface-1: #0b0b0d;
+    --surface-2: #15151a;
+    --text-primary: #e9edf2;
+    --text-secondary: #9aa3ae;
+    --text-muted: #5c646e;
+    --grid: rgba(233, 237, 242, 0.055);
+    --baseline: rgba(255, 45, 45, 0.28);
+    --border: rgba(255, 45, 45, 0.32);
+    --border-dim: rgba(233, 237, 242, 0.12);
+    --glow: rgba(255, 45, 45, 0.40);
+    --scanline: rgba(255, 45, 45, 0.022);
+    --vignette: rgba(255, 45, 45, 0.055);
+
+    --series-1: #ff2d2d; /* input tokens  - hot red  */
+    --series-2: #ff9d3d; /* output tokens - amber    */
+    --series-3: #7d8fa3; /* cache read    - steel    */
+    --series-4: #e6ebf2; /* cache write   - chrome   */
+    --cost: #ff2d2d;
+    --danger: #ff2d2d;
+    --good: #24c98a;
+    --rain: #8f1414;     /* background rain - deep oxidised red */
+
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace;
+  }
+
+  /* Deliberately single-look: this is a black terminal, so it stays black in
+     both colour schemes rather than flipping to a light surface. */
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--mono);
+  }
+
+  #matrix-rain {
+    position: fixed; inset: 0; z-index: 0;
+    opacity: 0.55; pointer-events: none;
+  }
+
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      var(--scanline) 3px, rgba(0,0,0,0) 4px
+    );
+    mix-blend-mode: overlay;
+  }
+  body::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 0%, var(--vignette), transparent 60%);
+  }
+
+  .wrap { position: relative; z-index: 2; max-width: 1080px; margin: 0 auto; padding: 32px 20px 64px; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
+  .prompt { color: var(--series-1); font-size: 12px; letter-spacing: .04em; opacity: 0.85; }
+  h1 {
+    font-size: 21px; font-weight: 650; margin: 4px 0 0; letter-spacing: .02em;
+    color: var(--series-1); text-shadow: 0 0 12px var(--glow), 0 0 3px var(--glow);
+    text-transform: uppercase; position: relative; display: inline-block;
+    animation: glitch-flicker 6.5s steps(1) infinite;
+  }
+  h1 .cursor { display: inline-block; width: 9px; height: 17px; background: var(--series-1); margin-left: 6px; vertical-align: -3px; animation: blink 1.1s steps(1) infinite; box-shadow: 0 0 8px var(--glow); }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+  /* The heading itself is NEVER clipped — it only dips in opacity. The sliced
+     RGB-split jump runs on two absolutely-positioned copies layered over it, so
+     a mid-flicker frame can never leave the real text cut off. steps(1) keeps
+     every state discrete: clip-path does not interpolate smoothly, and letting
+     the browser tween it is what produced the stuck half-height heading. */
+  h1::before, h1::after {
+    content: attr(data-glitch);
+    position: absolute; top: 0; left: 0;
+    color: var(--series-1); white-space: pre;
+    opacity: 0; pointer-events: none;
+  }
+  h1::before { animation: glitch-slice-top 6.5s steps(1) infinite; }
+  h1::after  { animation: glitch-slice-bottom 6.5s steps(1) infinite; }
+
+  @keyframes glitch-flicker {
+    0%, 91%, 95%, 100% { opacity: 1; }
+    92% { opacity: .78; }
+    93% { opacity: 1; }
+    94% { opacity: .88; }
+  }
+  @keyframes glitch-slice-top {
+    0%, 91%, 95%, 100% { opacity: 0; transform: none; clip-path: inset(0 0 55% 0); text-shadow: none; }
+    92% { opacity: 1; transform: translate(-2px, -1px); clip-path: inset(0 0 55% 0); text-shadow: 2px 0 var(--series-2); }
+    93% { opacity: 1; transform: translate(2px, 0);     clip-path: inset(0 0 55% 0); text-shadow: -2px 0 var(--series-4); }
+    94% { opacity: 1; transform: translate(-1px, 1px);  clip-path: inset(0 0 55% 0); text-shadow: 1px 0 var(--series-2); }
+  }
+  @keyframes glitch-slice-bottom {
+    0%, 91%, 95%, 100% { opacity: 0; transform: none; clip-path: inset(45% 0 0 0); text-shadow: none; }
+    92% { opacity: 1; transform: translate(2px, 1px);  clip-path: inset(45% 0 0 0); text-shadow: -2px 0 var(--series-4); }
+    93% { opacity: 1; transform: translate(-2px, 0);   clip-path: inset(45% 0 0 0); text-shadow: 2px 0 var(--series-2); }
+    94% { opacity: 1; transform: translate(1px, -1px); clip-path: inset(45% 0 0 0); text-shadow: -1px 0 var(--series-4); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    h1, h1::before, h1::after { animation: none; }
+    h1::before, h1::after { display: none; }
+  }
+  .sub { color: var(--text-secondary); font-size: 12px; margin-top: 6px; }
+  .sub::before { content: "// "; color: var(--text-muted); }
+
+  .live-badge {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: 12px;
+    font-size: 10px; letter-spacing: .1em; color: var(--good); text-transform: uppercase;
+    vertical-align: middle;
+  }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--good);
+    box-shadow: 0 0 6px var(--good), 0 0 2px var(--good);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+  .controls { display: flex; align-items: center; gap: 8px; }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 0; overflow: hidden; background: var(--surface-1); }
+  .seg button {
+    appearance: none; border: none; background: transparent; color: var(--text-secondary);
+    padding: 8px 14px; font-size: 12px; cursor: pointer; font-family: var(--mono);
+    letter-spacing: .06em; text-transform: uppercase; transition: background .15s, color .15s;
+  }
+  .seg button + button { border-left: 1px solid var(--border-dim); }
+  .seg button:hover { color: var(--text-primary); background: rgba(255,45,45,0.10); }
+  .seg button.active { background: var(--series-1); color: #0b0b0d; font-weight: 650; box-shadow: 0 0 14px var(--glow); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border-dim); border-radius: 0;
+    padding: 15px 17px; position: relative; overflow: hidden;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .card:hover { border-color: var(--border); box-shadow: 0 0 26px -4px var(--glow); }
+  .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--card-accent, var(--series-1)); opacity: .8; }
+  .card::after {
+    content: ""; position: absolute; bottom: -1px; right: -1px; width: 10px; height: 10px;
+    border-bottom: 2px solid var(--card-accent, var(--series-1)); border-right: 2px solid var(--card-accent, var(--series-1));
+    opacity: .7; pointer-events: none;
+  }
+  .card .label { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card .value { font-size: 24px; font-weight: 650; margin-top: 7px; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  .card .dot { display: inline-block; width: 8px; height: 8px; margin-right: 7px; box-shadow: 0 0 6px currentColor; background: currentColor; }
+
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border-dim); border-radius: 0;
+    padding: 18px 20px 10px; margin-bottom: 18px; position: relative;
+  }
+  .panel::before, .panel::after {
+    content: ""; position: absolute; width: 14px; height: 14px; pointer-events: none; opacity: .85;
+  }
+  .panel::before { top: -1px; left: -1px; border-top: 2px solid var(--series-1); border-left: 2px solid var(--series-1); }
+  .panel::after { bottom: -1px; right: -1px; border-bottom: 2px solid var(--series-1); border-right: 2px solid var(--series-1); }
+  .panel h2 {
+    font-size: 12px; font-weight: 650; margin: 0 0 14px; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  .panel h2::before { content: "> "; color: var(--series-1); }
+  .chart-h { height: 260px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: right; padding: 9px 8px; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  thead th { color: var(--text-muted); font-weight: 550; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border-dim); }
+  tbody tr + tr td { border-top: 1px solid var(--border-dim); }
+  tbody tr:hover { background: rgba(255,45,45,0.07); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 4px; }
+  .stat { border-left: 2px solid var(--border-dim); padding: 2px 0 2px 13px; }
+  .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .09em; }
+  .stat-value { font-size: 21px; font-weight: 650; margin-top: 6px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .stat-note { font-size: 11px; color: var(--text-secondary); margin-top: 5px; }
+  .bar { height: 4px; background: var(--surface-2); margin-top: 9px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--bar-fill, var(--series-1)); box-shadow: 0 0 10px var(--bar-fill, var(--series-1)); }
+
+  .session-meta { font-size: 11px; color: var(--text-muted); margin: 16px 0 4px; letter-spacing: .04em; }
+  .session-meta b { color: var(--text-secondary); font-weight: 550; }
+  .session-meta .sep { color: var(--border); margin: 0 8px; }
+
+  .model-name { display: flex; align-items: center; gap: 8px; }
+  .model-dot { width: 8px; height: 8px; flex-shrink: 0; box-shadow: 0 0 6px currentColor; background: currentColor; }
+
+  .state { padding: 60px 20px; text-align: center; color: var(--text-secondary); font-size: 13px; }
+  .state strong { color: var(--series-1); }
+  .state code {
+    background: rgba(255,45,45,0.09); border: 1px solid var(--border-dim); color: var(--series-1);
+    padding: 2px 6px; border-radius: 0; font-size: 12px;
+  }
+  .state pre {
+    display: inline-block; text-align: left; background: var(--surface-2);
+    border: 1px solid var(--border-dim); border-radius: 0; padding: 14px 18px; margin-top: 14px;
+    font-size: 12px; color: var(--series-1); box-shadow: inset 0 0 24px rgba(255,45,45,0.07);
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="matrix-rain"></canvas>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="prompt">root@claude-code:~$ ./token-usage --monitor</div>
+      <h1 data-glitch="Token Usage">Token Usage<span class="cursor"></span></h1><span class="live-badge"><span class="live-dot"></span>sys online</span>
+      <div class="sub" id="subhead">initializing…</div>
+    </div>
+    <div class="controls">
+      <div class="seg" id="range-seg">
+        <button data-days="7">7d</button>
+        <button data-days="30" class="active">30d</button>
+        <button data-days="90">90d</button>
+        <button data-days="3650">All</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="setup-state" class="state hidden">
+    <p><strong>[ NO SIGNAL ]</strong> no local Claude Code logs found.</p>
+    <p>This dashboard reads token usage directly from Claude Code's local session
+       transcripts (<code>~/.claude/projects/**/*.jsonl</code>) — no API key needed.
+       The container just needs that folder mounted in, read-only:</p>
+    <pre>docker run -d --name Token-Usage -p 5000:5000 \
+  -v "C:\Users\&lt;you&gt;\.claude\projects:/claude-logs:ro" \
+  token-usage-app</pre>
+  </div>
+
+  <div id="error-state" class="state hidden"></div>
+
+  <div id="app" class="hidden">
+    <div class="cards" id="cards"></div>
+
+    <div class="panel hidden" id="session-panel">
+      <h2>Current session</h2>
+      <div class="stats" id="session-stats"></div>
+      <div class="session-meta" id="session-meta"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Daily token usage</h2>
+      <div class="chart-h"><canvas id="tokenChart"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <h2>Daily cost (est. usd)</h2>
+      <div class="chart-h"><canvas id="costChart"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <h2>By model</h2>
+      <table id="model-table">
+        <thead>
+          <tr><th>Model</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Cost</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- matrix rain background ----
+(function () {
+  const canvas = document.getElementById('matrix-rain');
+  const ctx = canvas.getContext('2d');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let cols, drops;
+  const chars = 'アイウエオカキクケコサシスセソ01アカサタナハマヤラワ$#&%';
+
+  function hexToRgba(hex, alpha) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    cols = Math.floor(canvas.width / 16);
+    drops = new Array(cols).fill(0).map(() => Math.random() * -50);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  if (reduceMotion) return;
+
+  function frame() {
+    const bg = cssVar('--bg') || '#000000';
+    const ink = cssVar('--rain') || '#8f1414';
+    ctx.fillStyle = hexToRgba(bg, 0.12);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = ink;
+    ctx.font = '14px monospace';
+    for (let i = 0; i < cols; i++) {
+      const ch = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(ch, i * 16, drops[i] * 16);
+      if (drops[i] * 16 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+const MODEL_COLORS = ['#ff2d2d', '#ff9d3d', '#7d8fa3', '#e6ebf2', '#9e1b1b', '#ffd166', '#4a6a8a', '#24c98a'];
+const modelColorMap = new Map();
+function colorForModel(name) {
+  if (!modelColorMap.has(name)) modelColorMap.set(name, MODEL_COLORS[modelColorMap.size % MODEL_COLORS.length]);
+  return modelColorMap.get(name);
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function fmtInt(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return String(Math.round(n));
+}
+function fmtUSD(n) {
+  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtDuration(ms) {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins < 60) return mins + 'm';
+  return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+}
+
+function fmtClock(d) {
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Fill colour escalates as the budget is consumed — status roles, not series
+// colours, so a nearly-spent budget reads as a warning rather than as data.
+function budgetColor(pct) {
+  if (pct >= 85) return cssVar('--danger');
+  if (pct >= 60) return cssVar('--series-2');
+  return cssVar('--good');
+}
+
+let sessionState = null;
+
+// Repainted on a 1s ticker so the countdown stays live between data fetches.
+function paintSession() {
+  const s = sessionState;
+  if (!s) return;
+
+  const now = Date.now();
+  const start = new Date(s.window_start);
+  const end = new Date(s.window_end);
+  const span = end - start;
+
+  const elapsedPct = Math.min(100, Math.max(0, ((now - start) / span) * 100));
+  const remaining = end - now;
+  const budgetPct = s.budget_tokens > 0 ? (s.total_tokens / s.budget_tokens) * 100 : 0;
+  const fill = budgetColor(budgetPct);
+
+  const stats = [
+    {
+      label: 'Session started',
+      value: fmtClock(start),
+      note: `${fmtDuration(now - start)} ago`,
+    },
+    {
+      label: 'Resets at',
+      value: fmtClock(end),
+      note: remaining > 0 ? `in ${fmtDuration(remaining)}` : 'window expired — next message starts a new one',
+    },
+    {
+      label: 'Window elapsed',
+      value: elapsedPct.toFixed(0) + '%',
+      bar: elapsedPct,
+      barColor: cssVar('--series-3'),
+      note: `of the ${s.window_hours}h window`,
+    },
+    {
+      label: 'Used this session',
+      value: budgetPct.toFixed(1) + '%',
+      valueColor: fill,
+      bar: Math.min(100, budgetPct),
+      barColor: fill,
+      note: `${fmtInt(s.total_tokens)} of ${fmtInt(s.budget_tokens)} token budget`,
+    },
+  ];
+
+  document.getElementById('session-stats').innerHTML = stats.map(st => `
+    <div class="stat">
+      <div class="stat-label">${st.label}</div>
+      <div class="stat-value"${st.valueColor ? ` style="color:${st.valueColor}"` : ''}>${st.value}</div>
+      ${st.bar !== undefined ? `<div class="bar" style="--bar-fill:${st.barColor}"><span style="width:${st.bar}%"></span></div>` : ''}
+      <div class="stat-note">${st.note}</div>
+    </div>`).join('');
+
+  const sep = '<span class="sep">·</span>';
+  document.getElementById('session-meta').innerHTML = [
+    `<b>${s.turns}</b> turns`,
+    `<b>${s.models.join(', ')}</b>`,
+    `est. <b>${fmtUSD(s.totals.cost_usd)}</b>`,
+    `budget is local — set <b>SESSION_TOKEN_BUDGET</b> to match your plan`,
+  ].join(sep);
+}
+
+function renderSession(s) {
+  const panel = document.getElementById('session-panel');
+  sessionState = s;
+  if (!s) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  paintSession();
+}
+
+setInterval(paintSession, 1000);
+
+let tokenChart, costChart;
+let currentDays = 30;
+
+async function loadData(days) {
+  const res = await fetch(`/api/data?days=${days}`);
+  const body = await res.json();
+  if (!res.ok) {
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('setup-state').classList.add('hidden');
+    const errEl = document.getElementById('error-state');
+    errEl.innerHTML = `<strong>[ ERROR ]</strong> ${body.error || 'Something went wrong fetching usage data.'}`;
+    errEl.classList.remove('hidden');
+    return;
+  }
+  document.getElementById('error-state').classList.add('hidden');
+  document.getElementById('setup-state').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  render(body);
+}
+
+function render(data) {
+  renderSession(data.current_session);
+
+  const t = data.totals;
+  const totalTokens = t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens;
+
+  document.getElementById('subhead').textContent =
+    `range ${data.dates[0] || '—'} → ${data.dates[data.dates.length - 1] || '—'} · sync ${new Date(data.generated_at).toLocaleTimeString()} · cost = local list-price estimate`;
+
+  const cards = [
+    { label: 'Total tokens', value: fmtInt(totalTokens), color: null },
+    { label: 'Input tokens', value: fmtInt(t.input_tokens), color: cssVar('--series-1') },
+    { label: 'Output tokens', value: fmtInt(t.output_tokens), color: cssVar('--series-2') },
+    { label: 'Cache read', value: fmtInt(t.cache_read_tokens), color: cssVar('--series-3') },
+    { label: 'Cache write', value: fmtInt(t.cache_creation_tokens), color: cssVar('--series-4') },
+    { label: 'Est. cost', value: fmtUSD(t.cost_usd), color: cssVar('--cost') },
+  ];
+  document.getElementById('cards').innerHTML = cards.map(c => `
+    <div class="card" style="--card-accent:${c.color || cssVar('--text-muted')}">
+      <div class="label">${c.color ? `<span class="dot" style="color:${c.color}"></span>` : ''}${c.label}</div>
+      <div class="value">${c.value}</div>
+    </div>`).join('');
+
+  const grid = cssVar('--grid');
+  const baseline = cssVar('--baseline');
+  const muted = cssVar('--text-muted');
+  const surface = cssVar('--surface-1');
+  const text = cssVar('--text-primary');
+
+  Chart.defaults.font.family = "ui-monospace, 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace";
+  Chart.defaults.color = muted;
+
+  const labels = data.dates;
+  const tokenDatasets = [
+    { key: 'input_tokens', label: 'Input', color: cssVar('--series-1') },
+    { key: 'output_tokens', label: 'Output', color: cssVar('--series-2') },
+    { key: 'cache_read_tokens', label: 'Cache read', color: cssVar('--series-3') },
+    { key: 'cache_creation_tokens', label: 'Cache write', color: cssVar('--series-4') },
+  ].map(d => ({
+    label: d.label,
+    data: data.daily.map(day => day[d.key]),
+    borderColor: d.color,
+    backgroundColor: d.color + '26',
+    fill: true,
+    stack: 'tokens',
+    tension: 0.25,
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    pointHoverBackgroundColor: d.color,
+    pointHoverBorderColor: cssVar('--bg'),
+  }));
+
+  if (tokenChart) tokenChart.destroy();
+  tokenChart = new Chart(document.getElementById('tokenChart'), {
+    type: 'line',
+    data: { labels, datasets: tokenDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 9, boxHeight: 9, usePointStyle: true, color: text, padding: 16, font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: surface, titleColor: text, bodyColor: text,
+          borderColor: baseline, borderWidth: 1, padding: 10,
+          callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtInt(ctx.parsed.y)}` },
+        },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, font: { size: 10.5 } } },
+        y: { stacked: true, grid: { color: grid }, border: { display: false }, ticks: { color: muted, callback: v => fmtInt(v), font: { size: 10.5 } } },
+      },
+    },
+  });
+
+  if (costChart) costChart.destroy();
+  costChart = new Chart(document.getElementById('costChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Cost',
+        data: data.daily.map(d => d.cost_usd),
+        backgroundColor: cssVar('--cost') + '99',
+        borderColor: cssVar('--cost'),
+        borderWidth: 1.5,
+        borderRadius: 2,
+        maxBarThickness: 28,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: surface, titleColor: text, bodyColor: text,
+          borderColor: baseline, borderWidth: 1, padding: 10,
+          callbacks: { label: (ctx) => fmtUSD(ctx.parsed.y) },
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, font: { size: 10.5 } } },
+        y: { grid: { color: grid }, border: { display: false }, ticks: { color: muted, callback: v => '$' + v, font: { size: 10.5 } } },
+      },
+    },
+  });
+
+  const tbody = document.querySelector('#model-table tbody');
+  tbody.innerHTML = data.by_model.map(m => `
+    <tr>
+      <td><span class="model-name"><span class="model-dot" style="color:${colorForModel(m.model)}"></span>${m.model}</span></td>
+      <td>${fmtInt(m.input_tokens)}</td>
+      <td>${fmtInt(m.output_tokens)}</td>
+      <td>${fmtInt(m.cache_read_tokens)}</td>
+      <td>${fmtInt(m.cache_creation_tokens)}</td>
+      <td>${fmtUSD(m.cost_usd)}</td>
+    </tr>`).join('') || '<tr><td colspan="6">No usage in this range.</td></tr>';
+}
+
+document.getElementById('range-seg').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  document.querySelectorAll('#range-seg button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentDays = parseInt(btn.dataset.days, 10);
+  loadData(currentDays);
+});
+
+const LOGS_AVAILABLE = {{ 'true' if logs_available else 'false' }};
+if (!LOGS_AVAILABLE) {
+  document.getElementById('setup-state').classList.remove('hidden');
+} else {
+  loadData(currentDays);
+  setInterval(() => loadData(currentDays), 60000);
+}
+</script>
+</body>
+</html>

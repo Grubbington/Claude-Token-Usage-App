@@ -1,0 +1,3 @@
+# This project builds into a Linux container, so everything that gets COPYed in
+# stays LF regardless of the checkout platform.
+* text=auto eol=lf
