@@ -4,7 +4,9 @@ A self-hosted dashboard for Claude Code token usage. It reads Claude Code's own
 local session transcripts — **no API key of any kind is required**, and nothing
 leaves your machine.
 
-![theme](https://img.shields.io/badge/theme-red%20on%20black-ff2d2d)
+![The Token-Usage dashboard](docs/dashboard.png)
+
+<sub>Screenshots use generated sample data, not real usage.</sub>
 
 ## What it shows
 
@@ -14,6 +16,11 @@ leaves your machine.
 - **Daily token usage** — stacked input / output / cache-read / cache-write.
 - **Daily cost** — estimated, see the caveat below.
 - **By model** — per-model totals for the selected range (7d / 30d / 90d / all).
+
+![The current-session panel](docs/session.png)
+
+The session window is anchored to your first message and rolls forward in fixed
+spans, so "resets at" is the point where the next message opens a new window.
 
 ## How it works
 
