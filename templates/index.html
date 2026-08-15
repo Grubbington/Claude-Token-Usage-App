@@ -133,7 +133,10 @@
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
   @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 
-  .controls { display: flex; align-items: center; gap: 8px; }
+  /* Let the title column shrink and wrap its own text rather than shoving the
+     controls onto a second row when the subhead runs long. */
+  header > div:first-child { flex: 1 1 340px; min-width: 0; }
+  .controls { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
   .seg { display: flex; border: 1px solid var(--border); border-radius: 0; overflow: hidden; background: var(--surface-1); }
   .seg button {
     appearance: none; border: none; background: transparent; color: var(--text-secondary);
@@ -143,6 +146,25 @@
   .seg button + button { border-left: 1px solid var(--border-dim); }
   .seg button:hover { color: var(--text-primary); background: rgba(255,45,45,0.10); }
   .seg button.active { background: var(--series-1); color: #0b0b0d; font-weight: 650; box-shadow: 0 0 14px var(--glow); }
+
+  /* Native select, restyled to sit flush with the range buttons. */
+  .select-wrap { position: relative; display: inline-flex; }
+  .select-wrap::after {
+    content: "▾"; position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+    pointer-events: none; color: var(--series-1); font-size: 11px;
+  }
+  .select-wrap select {
+    appearance: none; -webkit-appearance: none;
+    background: var(--surface-1); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 0;
+    padding: 8px 30px 8px 14px; font-family: var(--mono); font-size: 12px;
+    letter-spacing: .06em; text-transform: uppercase; cursor: pointer;
+    transition: color .15s, box-shadow .15s;
+  }
+  .select-wrap select:hover { color: var(--text-primary); }
+  .select-wrap select:focus-visible { outline: none; color: var(--text-primary); box-shadow: 0 0 14px var(--glow); }
+  /* The popup list is drawn by the OS, so it needs explicit colours. */
+  .select-wrap select option { background: var(--surface-2); color: var(--text-primary); }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 22px; }
   .card {
@@ -229,6 +251,13 @@
         <button data-days="90">90d</button>
         <button data-days="3650">All</button>
       </div>
+      <div class="select-wrap">
+        <select id="currency-select" aria-label="Display currency">
+          <option value="USD">USD</option>
+          <option value="AUD">AUD</option>
+          <option value="GBP">GBP</option>
+        </select>
+      </div>
     </div>
   </header>
 
@@ -259,7 +288,7 @@
     </div>
 
     <div class="panel">
-      <h2>Daily cost (est. usd)</h2>
+      <h2 id="cost-heading">Daily cost</h2>
       <div class="chart-h"><canvas id="costChart"></canvas></div>
     </div>
 
@@ -337,8 +366,26 @@ function fmtInt(n) {
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return String(Math.round(n));
 }
-function fmtUSD(n) {
-  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// All costs arrive from the API in USD; the browser converts for display so
+// switching currency is instant and needs no refetch.
+// null until the first render, so a visitor with no stored preference picks up
+// the server's DISPLAY_CURRENCY rather than a hardcoded guess.
+let CURRENCY = localStorage.getItem('currency');
+let RATES = { USD: 1 };
+
+function toDisplay(usd) {
+  return usd * (RATES[CURRENCY] || 1);
+}
+// Formats a value already in the display currency.
+function fmtAmount(amount, dp) {
+  return amount.toLocaleString(undefined, {
+    style: 'currency', currency: CURRENCY,
+    minimumFractionDigits: dp, maximumFractionDigits: dp,
+  });
+}
+// Converts from USD, then formats. Used everywhere the raw API value is USD.
+function fmtMoney(usd) {
+  return fmtAmount(toDisplay(usd), 2);
 }
 function fmtDuration(ms) {
   const mins = Math.max(0, Math.round(ms / 60000));
@@ -414,7 +461,7 @@ function paintSession() {
   document.getElementById('session-meta').innerHTML = [
     `<b>${s.turns}</b> turns`,
     `<b>${s.models.join(', ')}</b>`,
-    `est. <b>${fmtUSD(s.totals.cost_usd)}</b>`,
+    `est. <b>${fmtMoney(s.totals.cost)}</b>`,
   ].join('<span class="sep">·</span>');
 }
 
@@ -430,6 +477,8 @@ setInterval(paintSession, 1000);
 
 let tokenChart, costChart;
 let currentDays = 30;
+// Kept so a currency change can repaint from memory instead of refetching.
+let lastData = null;
 
 async function loadData(days) {
   const res = await fetch(`/api/data?days=${days}`);
@@ -449,13 +498,28 @@ async function loadData(days) {
 }
 
 function render(data) {
+  lastData = data;
+  RATES = data.rates || { USD: 1 };
+  // Fall back to the server default when unset, or if a stored choice is no
+  // longer offered.
+  if (!CURRENCY || !RATES[CURRENCY]) CURRENCY = data.default_currency || 'USD';
+  document.getElementById('currency-select').value = CURRENCY;
+  document.getElementById('cost-heading').textContent = `Daily cost (est. ${CURRENCY})`;
+
   renderSession(data.current_session);
 
   const t = data.totals;
   const totalTokens = t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens;
 
+  const meta = data.rates_meta || {};
+  const fxAge = meta.updated_at
+    ? ` (${new Date(meta.updated_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })})`
+    : '';
+  const fxNote = CURRENCY === data.base_currency
+    ? `cost = local list-price estimate (${CURRENCY})`
+    : `cost = local list-price estimate · ${data.base_currency}→${CURRENCY} @ ${RATES[CURRENCY]}${fxAge}`;
   document.getElementById('subhead').textContent =
-    `range ${data.dates[0] || '—'} → ${data.dates[data.dates.length - 1] || '—'} · sync ${new Date(data.generated_at).toLocaleTimeString()} · cost = local list-price estimate`;
+    `range ${data.dates[0] || '—'} → ${data.dates[data.dates.length - 1] || '—'} · sync ${new Date(data.generated_at).toLocaleTimeString()} · ${fxNote}`;
 
   const cards = [
     { label: 'Total tokens', value: fmtInt(totalTokens), color: null },
@@ -463,7 +527,7 @@ function render(data) {
     { label: 'Output tokens', value: fmtInt(t.output_tokens), color: cssVar('--series-2') },
     { label: 'Cache read', value: fmtInt(t.cache_read_tokens), color: cssVar('--series-3') },
     { label: 'Cache write', value: fmtInt(t.cache_creation_tokens), color: cssVar('--series-4') },
-    { label: 'Est. cost', value: fmtUSD(t.cost_usd), color: cssVar('--cost') },
+    { label: 'Est. cost', value: fmtMoney(t.cost), color: cssVar('--cost') },
   ];
   document.getElementById('cards').innerHTML = cards.map(c => `
     <div class="card" style="--card-accent:${c.color || cssVar('--text-muted')}">
@@ -530,7 +594,9 @@ function render(data) {
       labels,
       datasets: [{
         label: 'Cost',
-        data: data.daily.map(d => d.cost_usd),
+        // Converted up front so Chart.js picks round tick values in the
+        // display currency rather than in USD.
+        data: data.daily.map(d => toDisplay(d.cost)),
         backgroundColor: cssVar('--cost') + '99',
         borderColor: cssVar('--cost'),
         borderWidth: 1.5,
@@ -545,12 +611,13 @@ function render(data) {
         tooltip: {
           backgroundColor: surface, titleColor: text, bodyColor: text,
           borderColor: baseline, borderWidth: 1, padding: 10,
-          callbacks: { label: (ctx) => fmtUSD(ctx.parsed.y) },
+          // Already in display currency — format without converting again.
+          callbacks: { label: (ctx) => fmtAmount(ctx.parsed.y, 2) },
         },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, font: { size: 10.5 } } },
-        y: { grid: { color: grid }, border: { display: false }, ticks: { color: muted, callback: v => '$' + v, font: { size: 10.5 } } },
+        y: { grid: { color: grid }, border: { display: false }, ticks: { color: muted, callback: v => fmtAmount(v, 0), font: { size: 10.5 } } },
       },
     },
   });
@@ -563,9 +630,15 @@ function render(data) {
       <td>${fmtInt(m.output_tokens)}</td>
       <td>${fmtInt(m.cache_read_tokens)}</td>
       <td>${fmtInt(m.cache_creation_tokens)}</td>
-      <td>${fmtUSD(m.cost_usd)}</td>
+      <td>${fmtMoney(m.cost)}</td>
     </tr>`).join('') || '<tr><td colspan="6">No usage in this range.</td></tr>';
 }
+
+document.getElementById('currency-select').addEventListener('change', (e) => {
+  CURRENCY = e.target.value;
+  localStorage.setItem('currency', CURRENCY);
+  if (lastData) render(lastData);
+});
 
 document.getElementById('range-seg').addEventListener('click', (e) => {
   const btn = e.target.closest('button');

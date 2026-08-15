@@ -49,6 +49,65 @@ CACHE_WRITE_5M_MULTIPLIER = 1.25
 CACHE_WRITE_1H_MULTIPLIER = 2.0
 CACHE_READ_MULTIPLIER = 0.1
 
+# Anthropic lists prices in USD, so PRICING above stays in USD and every cost
+# the API returns is in USD. The browser converts for display using the table
+# below, which lets the currency picker switch without refetching.
+#
+# These are static figures, not a live lookup — the app makes no outbound
+# network calls — so set them to whatever you consider current.
+BASE_CURRENCY = "USD"
+FX_RATE_DEFAULTS = {
+    "USD": 1.0,
+    "AUD": float(os.environ.get("FX_RATE_AUD", "1.52")),
+    "GBP": float(os.environ.get("FX_RATE_GBP", "0.79")),
+}
+DEFAULT_CURRENCY = os.environ.get("DISPLAY_CURRENCY", "AUD")
+
+# Optional rates file, refreshed out-of-band by scripts/update-rates.ps1 and
+# mounted in read-only. Keeping the lookup on the host means the container
+# itself still makes no outbound network calls. Absent file = use the defaults.
+FX_RATES_FILE = os.environ.get("FX_RATES_FILE", "/rates/rates.json")
+FX_FILE_TTL = 300
+
+
+def _fx_rates():
+    """Env-var defaults, overlaid with the mounted rates file when present.
+
+    Re-read on a short TTL so the weekly updater takes effect without a
+    rebuild or a container restart.
+    """
+    with _cache_lock:
+        cached = _cache.get("fx")
+        if cached and (time.time() - cached["ts"]) < FX_FILE_TTL:
+            return cached["data"]
+
+    rates = dict(FX_RATE_DEFAULTS)
+    meta = {"source": "built-in defaults", "updated_at": None}
+
+    try:
+        # utf-8-sig: PowerShell writes a BOM by default, and a BOM makes
+        # json.load fail. This reads cleanly with or without one.
+        with open(FX_RATES_FILE, "r", encoding="utf-8-sig") as f:
+            doc = json.load(f)
+        for code, value in (doc.get("rates") or {}).items():
+            rates[code] = float(value)
+        rates[BASE_CURRENCY] = 1.0  # the base never converts
+        meta = {
+            "source": doc.get("source") or "rates file",
+            "updated_at": doc.get("updated_at"),
+        }
+    except FileNotFoundError:
+        pass  # No rates file mounted — defaults are the expected path here.
+    except (OSError, ValueError, TypeError, AttributeError) as e:
+        # A file that exists but cannot be parsed is a real problem; falling
+        # back silently is how a stale rate goes unnoticed for weeks.
+        app.logger.warning("Ignoring unreadable rates file %s: %s", FX_RATES_FILE, e)
+
+    data = {"rates": rates, "meta": meta}
+    with _cache_lock:
+        _cache["fx"] = {"ts": time.time(), "data": data}
+    return data
+
 
 def _price_for(model: str):
     return PRICING.get(model, DEFAULT_PRICING)
@@ -72,7 +131,7 @@ def _empty_bucket():
         "output_tokens": 0,
         "cache_read_tokens": 0,
         "cache_creation_tokens": 0,
-        "cost_usd": 0.0,
+        "cost": 0.0,
     }
 
 
@@ -170,17 +229,17 @@ def _fetch_report(days: int):
         day["output_tokens"] += event["output_tokens"]
         day["cache_read_tokens"] += event["cache_read_tokens"]
         day["cache_creation_tokens"] += cache_creation_total
-        day["cost_usd"] += cost
+        day["cost"] += cost
 
         m = by_model.setdefault(model, _empty_bucket())
         m["input_tokens"] += event["input_tokens"]
         m["output_tokens"] += event["output_tokens"]
         m["cache_read_tokens"] += event["cache_read_tokens"]
         m["cache_creation_tokens"] += cache_creation_total
-        m["cost_usd"] += cost
+        m["cost"] += cost
 
     dates = sorted(daily.keys())
-    models_sorted = sorted(by_model.items(), key=lambda kv: kv[1]["cost_usd"], reverse=True)
+    models_sorted = sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True)
 
     data = {
         "dates": dates,
@@ -193,8 +252,10 @@ def _fetch_report(days: int):
             "cache_creation_tokens": sum(
                 d["cache_creation_tokens"] for d in daily.values()
             ),
-            "cost_usd": sum(d["cost_usd"] for d in daily.values()),
+            "cost": sum(d["cost"] for d in daily.values()),
         },
+        "base_currency": BASE_CURRENCY,
+        "default_currency": DEFAULT_CURRENCY,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -255,7 +316,7 @@ def _current_session_report():
         totals["output_tokens"] += event["output_tokens"]
         totals["cache_read_tokens"] += event["cache_read_tokens"]
         totals["cache_creation_tokens"] += cache_creation_total
-        totals["cost_usd"] += _cost_for_usage(
+        totals["cost"] += _cost_for_usage(
             event["model"],
             event["input_tokens"],
             event["output_tokens"],
@@ -317,8 +378,16 @@ def api_data():
 
     try:
         data = _fetch_report(days)
-        # Not filtered by `days` — the live session is always shown in full.
-        data = dict(data, current_session=_current_session_report())
+        fx = _fx_rates()
+        data = dict(
+            data,
+            # Not filtered by `days` — the live session is always shown in full.
+            current_session=_current_session_report(),
+            # Attached per-response so the rates file's own TTL governs
+            # freshness, rather than the longer report cache.
+            rates=fx["rates"],
+            rates_meta=fx["meta"],
+        )
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": f"Failed to read local logs: {e}"}), 500
