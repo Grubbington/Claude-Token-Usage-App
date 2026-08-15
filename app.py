@@ -301,6 +301,14 @@ def _current_session_report():
         if ts >= anchor + window:
             anchor = ts
 
+    # Once the last window has lapsed there is no live session, and showing the
+    # expired one would present stale figures as current.
+    if anchor + window <= datetime.now(timezone.utc):
+        data = {"active": False}
+        with _cache_lock:
+            _cache[cache_key] = {"ts": time.time(), "data": data}
+        return data
+
     totals = _empty_bucket()
     models = set()
     turns = 0
@@ -333,6 +341,7 @@ def _current_session_report():
     )
 
     data = {
+        "active": True,
         "window_start": anchor.isoformat(),
         "window_end": (anchor + window).isoformat(),
         "window_hours": SESSION_WINDOW_HOURS,

@@ -214,6 +214,8 @@
   .bar > span { display: block; height: 100%; background: var(--bar-fill, var(--series-1)); box-shadow: 0 0 10px var(--bar-fill, var(--series-1)); }
 
   .session-meta { font-size: 11px; color: var(--text-muted); margin: 16px 0 4px; letter-spacing: .04em; }
+  /* Idle state: no stats above, so drop the spacer they would have needed. */
+  .stats:empty + .session-meta { margin-top: 0; }
   .session-meta b { color: var(--text-secondary); font-weight: 550; }
   .session-meta .sep { color: var(--border); margin: 0 8px; }
 
@@ -407,6 +409,14 @@ function budgetColor(pct) {
 
 let sessionState = null;
 
+// Shown instead of the stats when no window is live, so a lapsed session's
+// figures are never left on screen looking current.
+function showIdleSession() {
+  document.getElementById('session-stats').innerHTML = '';
+  document.getElementById('session-meta').innerHTML =
+    'No active session <span class="sep">·</span> the next message starts a new window';
+}
+
 // Repainted on a 1s ticker so the countdown stays live between data fetches.
 function paintSession() {
   const s = sessionState;
@@ -415,6 +425,15 @@ function paintSession() {
   const now = Date.now();
   const start = new Date(s.window_start);
   const end = new Date(s.window_end);
+
+  // The window can lapse while the page sits open — switch over on the ticker
+  // rather than waiting for the next fetch.
+  if (now >= end) {
+    sessionState = null;
+    showIdleSession();
+    return;
+  }
+
   const span = end - start;
 
   const elapsedPct = Math.min(100, Math.max(0, ((now - start) / span) * 100));
@@ -431,7 +450,7 @@ function paintSession() {
     {
       label: 'Resets at',
       value: fmtClock(end),
-      note: remaining > 0 ? `in ${fmtDuration(remaining)}` : 'window expired — next message starts a new one',
+      note: `in ${fmtDuration(remaining)}`,
     },
     {
       label: 'Window elapsed',
@@ -467,9 +486,16 @@ function paintSession() {
 
 function renderSession(s) {
   const panel = document.getElementById('session-panel');
-  sessionState = s;
-  if (!s) { panel.classList.add('hidden'); return; }
+  // No logs at all — hide the panel entirely.
+  if (!s) { sessionState = null; panel.classList.add('hidden'); return; }
+
   panel.classList.remove('hidden');
+  if (!s.active) {
+    sessionState = null;
+    showIdleSession();
+    return;
+  }
+  sessionState = s;
   paintSession();
 }
 
